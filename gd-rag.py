@@ -16,6 +16,10 @@ from langchain.chains.history_aware_retriever import create_history_aware_retrie
 load_dotenv()
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 
+RED = "\033[91m"
+GREEN = "\033[92m"
+RESET = "\033[0m"
+
 def get_docs(folder_id):
     if os.path.exists("./docs.pkl"):
         with open('./docs.pkl', 'rb') as file:
@@ -58,7 +62,7 @@ def create_chain(vector_store):
     )
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "Answer the user's questions based on the context. Do not fabricate any information not present in the context. Context: {context}"),
+        ("system", "Answer the user's questions based on the context. Context: {context}"),
         MessagesPlaceholder(variable_name="chat_history"),
         ("human", "{input}")
     ])
@@ -104,12 +108,12 @@ if __name__ == '__main__':
     chat_history = []
 
     while True:
-        user_input = input("You: ")
+        user_input = input(f"{RED}You: {RESET}")
         if user_input.lower() == "exit":
             break
 
         response = process_chat(chain, user_input, chat_history)
         chat_history.append(HumanMessage(content=user_input))
         chat_history.append(AIMessage(content=response))
-        print("Assistant:", response)
+        print(f"{GREEN} Assistant: {response}")
 
