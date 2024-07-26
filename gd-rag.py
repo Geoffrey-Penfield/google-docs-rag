@@ -1,6 +1,8 @@
 from dotenv import load_dotenv
 import os
 import pickle
+import json
+import uuid
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
@@ -20,40 +22,52 @@ RED = "\033[91m"
 GREEN = "\033[92m"
 RESET = "\033[0m"
 
-def get_docs(folder_id):
-    if os.path.exists("./docs.pkl"):
-        with open('./docs.pkl', 'rb') as file:
-            docs = pickle.load(file)
-        return docs
-    
+GOOGLE_FOLDER_ID = "1lmajwMbvbtPV6EuIPVQbVVKI7_gLTUzy"
+
+def get_local_documents():
+    pass
+
+def get_docs_from_drive(folder_id):
+    local_docs = {}
+
     loader = GoogleDriveLoader(
         folder_id = folder_id,
         token_path = "./.credentials/google_token.json",
         credentials_path = "./.credentials/credentials.json",
         recursive = True
         )
-    pre_split = loader.load()
+    
+    pre_split_docs = loader.load()
+    for i, document in enumerate(pre_split_docs):
+        document.id = i
+        local_docs[document.id] = {
+            'modified_time': document.metadata['when'],
+            'splits': []
+        }
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=10000,
         chunk_overlap=2000
     )
 
-    docs = splitter.split_documents(pre_split)
-
-    with open('docs.pkl', 'wb') as file:
-        pickle.dump(docs, file)
-
-    return docs
+    for document in pre_split_docs:
+        split_doc = splitter.split_documents([document])
+        for split in split_doc:
+            split.id = str(uuid.uuid4())
+            local_docs[document.id]['splits'].append(split)
+    
+    return local_docs
 
 def create_db(docs):
     embedding = OpenAIEmbeddings(model="text-embedding-3-small")
-    if os.path.exists("./faiss_index"):
-        vector_store = FAISS.load_local("./faiss_index", embeddings=embedding, allow_dangerous_deserialization=True)
-        return vector_store
     vector_store = FAISS.from_documents(docs, embedding=embedding)
     vector_store.save_local("faiss_index")
     return vector_store
+
+def load_db():
+    embedding = OpenAIEmbeddings(model="text-embedding-3-small")
+    vector_store = FAISS.load_local("./faiss_index", embeddings=embedding, allow_dangerous_deserialization=True)
+    return vector_store    
 
 def create_chain(vector_store):
     model = ChatOpenAI(
@@ -101,9 +115,8 @@ def process_chat(chain, question, chat_history):
     return response["answer"]
 
 if __name__ == '__main__':
-    google_folder_id = "1lmajwMbvbtPV6EuIPVQbVVKI7_gLTUzy"
-    docs = get_docs(google_folder_id)
-    vector_store = create_db(docs)
+    docs = get_docs_from_drive(GOOGLE_FOLDER_ID)
+    vector_store = create_db(docs[])
     chain = create_chain(vector_store)
     chat_history = []
 
