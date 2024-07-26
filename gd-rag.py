@@ -101,7 +101,7 @@ def process_chat(chain, question, chat_history):
     return response["answer"]
 
 if __name__ == '__main__':
-    google_folder_id = "1veOSfFZDlMbB-KwSKad2BLfEfKAAJmmU"
+    google_folder_id = "1lmajwMbvbtPV6EuIPVQbVVKI7_gLTUzy"
     docs = get_docs(google_folder_id)
     vector_store = create_db(docs)
     chain = create_chain(vector_store)
