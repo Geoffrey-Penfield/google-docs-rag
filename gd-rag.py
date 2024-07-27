@@ -3,6 +3,7 @@ import os
 import pickle
 import json
 import uuid
+import pprint
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
@@ -14,6 +15,7 @@ from langchain.chains.retrieval import create_retrieval_chain
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.prompts import MessagesPlaceholder
 from langchain.chains.history_aware_retriever import create_history_aware_retriever
+from langchain_core.load import dumpd, dumps, load, loads
 
 load_dotenv()
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
@@ -28,6 +30,11 @@ def get_local_documents():
     pass
 
 def get_docs_from_drive(folder_id):
+    if os.path.exists('docs.json'):
+        with open('docs.json', 'r') as file:
+            local_docs = loads(json.load(file))
+        return local_docs
+
     local_docs = {}
 
     loader = GoogleDriveLoader(
@@ -55,6 +62,10 @@ def get_docs_from_drive(folder_id):
         for split in split_doc:
             split.id = str(uuid.uuid4())
             local_docs[document.id]['splits'].append(split)
+
+    string_representation = dumps(local_docs)
+    with open('docs.json', 'w') as file:
+        json.dump(string_representation, file)
     
     return local_docs
 
@@ -116,7 +127,12 @@ def process_chat(chain, question, chat_history):
 
 if __name__ == '__main__':
     docs = get_docs_from_drive(GOOGLE_FOLDER_ID)
-    vector_store = create_db(docs[])
+    all_splits = []
+    for item in docs.values():
+        for split in item['splits']:
+                all_splits.append(split)
+    vector_store = create_db(all_splits)
+    pprint.pprint(docs['0']['splits'][0].id)
     chain = create_chain(vector_store)
     chat_history = []
 

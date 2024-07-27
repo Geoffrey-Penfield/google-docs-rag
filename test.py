@@ -50,4 +50,5 @@ def get_docs_from_drive(folder_id):
     return local_docs
 
 documents = get_docs_from_drive(GOOGLE_FOLDER_ID)
-pprint.pprint(documents)
+all_splits = [split for item in documents.values() for split in item['splits']]
+pprint.pprint(all_splits)
