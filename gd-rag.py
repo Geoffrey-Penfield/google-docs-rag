@@ -4,6 +4,8 @@ import pickle
 import json
 import uuid
 import pprint
+import pandas as pd
+import re
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain.chains.combine_documents import create_stuff_documents_chain
@@ -49,12 +51,13 @@ def get_docs_from_drive(folder_id):
         document.id = i
         local_docs[document.id] = {
             'modified_time': document.metadata['when'],
-            'splits': []
+            'splits': [],
+            'vector_db_indexes' : []
         }
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=10000,
-        chunk_overlap=2000
+        chunk_size=20,
+        chunk_overlap=0
     )
 
     for document in pre_split_docs:
@@ -125,6 +128,11 @@ def process_chat(chain, question, chat_history):
     })
     return response["answer"]
 
+def extract_doc_id(url):
+    match = re.search(r'/d/([a-zA-Z0-9_-]+)', url)
+    return match.group(1) if match else None
+
+
 if __name__ == '__main__':
     docs = get_docs_from_drive(GOOGLE_FOLDER_ID)
     all_splits = []
@@ -132,7 +140,38 @@ if __name__ == '__main__':
         for split in item['splits']:
                 all_splits.append(split)
     vector_store = create_db(all_splits)
-    pprint.pprint(docs['0']['splits'][0].id)
+
+    v_dict = vector_store.docstore._dict
+    data_rows = []
+    for k in v_dict.keys():
+        source_url = v_dict[k].metadata['source']
+        google_doc_id = extract_doc_id(source_url)
+        title = v_dict[k].metadata['title']
+        modified_time = v_dict[k].metadata['when']
+        content = v_dict[k].page_content
+        data_rows.append({"chunk_id": k, "google_doc_id": google_doc_id, "title": title, "Updated": modified_time, "content": content})
+    vector_df = pd.DataFrame(data_rows)
+
+    print(vector_df)
+
+    # print(vector_store.index.ntotal)
+    # vector_db_indexes = vector_store.index_to_docstore_id
+    # for index, guid in vector_db_indexes.items():
+    #     for google_document_index, google_document_values in docs.items():
+    #         for split_document in docs[google_document_index]['splits']:
+    #             if guid == split_document.id:
+    #                 docs['vector_db_indexes'].append(index)
+    # for key in docs:
+    #     for split in docs[key]['splits']:
+    #         print(split.id)
+    # print(vector_db_indexes)
+    # vector_store.add_documents(all_splits)
+    # for key in docs:
+    #     for split in docs[key]['splits']:
+    #         print(split.id)
+    # print(vector_db_indexes)
+    # print(vector_store.index.ntotal)
+
     chain = create_chain(vector_store)
     chat_history = []
 
