@@ -33,25 +33,19 @@ SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
 def authenticate():
     creds = None
-    # The file token.pickle stores the user's access and refresh tokens, and is
-    # created automatically when the authorization flow completes for the first
-    # time.
     if os.path.exists(GOOGLE_TOKEN_PATH):
         creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_PATH, SCOPES)
-    # If there are no (valid) credentials available, let the user log in.
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
             flow = InstalledAppFlow.from_client_secrets_file(GOOGLE_CREDENTIALS_PATH, SCOPES)
             creds = flow.run_local_server(port=0)
-        # Save the credentials for the next run
         with open(GOOGLE_CREDENTIALS_PATH, 'w') as file:
             file.write(creds.to_json())
 
     service = build('drive', 'v3', credentials=creds)
     return service
-
 
 def get_metadata_from_drive_recursive(service=authenticate(), folder_id=GOOGLE_FOLDER_ID):
     results = []
@@ -125,6 +119,7 @@ def create_db(documents):
     embedding = OpenAIEmbeddings(model="text-embedding-3-small")
     vector_store = FAISS.from_documents(documents, embedding=embedding)
     vector_store.save_local("faiss_index")
+    print(f"{vector_store.index.ntotal} document(s) added to store.")
     return vector_store
 
 def load_db():
@@ -149,7 +144,7 @@ def create_chain(vector_store):
         prompt = prompt
     )
 
-    retriever = vector_store.as_retriever(search_kwargs={"k": 5}) # Pass search_kwargs={"k": X} where x is the number of documents to retrieve (split_docs). Default is 5.
+    retriever = vector_store.as_retriever(search_kwargs={"k": 5}) # Pass search_kwargs={"k": X} where x is the number of documents to retrieve (split_docs). Default is 4.
 
     retriever_prompt = ChatPromptTemplate.from_messages([
         MessagesPlaceholder(variable_name="chat_history"),
@@ -223,6 +218,7 @@ def add_documents_to_vector_store(vector_store, google_doc_ids):
 def update_vector_store(vector_store):
     vector_store_df = extract_metadata_from_vectore_store_dataframe(vector_store)
     drive_df = get_metadata_dataframe_from_drive()
+
     new_documents_df = drive_df[~drive_df['google_doc_id'].isin(vector_store_df['google_doc_id'])]
     deleted_documents_df = vector_store_df[~vector_store_df['google_doc_id'].isin(drive_df['google_doc_id'])]
     merged = pd.merge(vector_store_df, drive_df, on='google_doc_id', suffixes=('_old', '_new'))
@@ -232,10 +228,6 @@ def update_vector_store(vector_store):
     deleted_documents = deleted_documents_df['google_doc_id'].tolist()
     updated_documents = updated_documents_df['google_doc_id'].tolist()
 
-    print(new_documents)
-    print(deleted_documents)
-    print(updated_documents)
-
     if len(new_documents) != 0:
         add_documents_to_vector_store(vector_store, new_documents)
     if len(deleted_documents) != 0:
@@ -243,6 +235,10 @@ def update_vector_store(vector_store):
     if len(updated_documents) != 0:
         delete_documents_from_vector_store(vector_store, updated_documents)
         add_documents_to_vector_store(vector_store, updated_documents)
+
+    print(f"{len(new_documents)} document(s) added to store: {new_documents}")
+    print(f"{len(deleted_documents)} document(s) deleted from store: {deleted_documents}")
+    print(f"{len(updated_documents)} document(s) updated in store: {updated_documents}")
     
     vector_store.save_local("faiss_index")
     
@@ -253,7 +249,6 @@ if __name__ == '__main__':
     else:
         documents = load_and_split_docs_from_folder_id_recursively(GOOGLE_FOLDER_ID)
         vector_store = create_db(documents)
-    list_vector_store_dataframe(vector_store)
     chain = create_chain(vector_store)
     chat_history = []
 
