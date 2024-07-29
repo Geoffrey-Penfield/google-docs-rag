@@ -18,6 +18,10 @@ from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.prompts import MessagesPlaceholder
 from langchain.chains.history_aware_retriever import create_history_aware_retriever
 from langchain_core.load import dumpd, dumps, load, loads
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
 
 load_dotenv()
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
@@ -28,53 +32,83 @@ RESET = "\033[0m"
 
 GOOGLE_FOLDER_ID = "1lmajwMbvbtPV6EuIPVQbVVKI7_gLTUzy"
 
-def get_local_documents():
-    pass
+GOOGLE_CREDENTIALS_PATH = '.credentials/credentials.json'
+GOOGLE_TOKEN_PATH = '.credentials/google_token.json'
+SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
-def get_docs_from_drive(folder_id):
-    if os.path.exists('docs.json'):
-        with open('docs.json', 'r') as file:
-            local_docs = loads(json.load(file))
-        return local_docs
+def authenticate():
+    creds = None
+    # The file token.pickle stores the user's access and refresh tokens, and is
+    # created automatically when the authorization flow completes for the first
+    # time.
+    if os.path.exists(GOOGLE_TOKEN_PATH):
+        creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_PATH, SCOPES)
+    # If there are no (valid) credentials available, let the user log in.
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(GOOGLE_CREDENTIALS_PATH, SCOPES)
+            creds = flow.run_local_server(port=0)
+        # Save the credentials for the next run
+        with open(GOOGLE_CREDENTIALS_PATH, 'w') as file:
+            file.write(creds.to_json())
 
-    local_docs = {}
+    service = build('drive', 'v3', credentials=creds)
+    return service
+
+
+def get_metadata_from_drive_recursive(service=authenticate(), folder_id=GOOGLE_FOLDER_ID):
+    results = []
+    page_token = None
+    query = f"'{folder_id}' in parents and trashed = false"
+    while True:
+        response = service.files().list(q=query,
+                                        spaces='drive',
+                                        fields='nextPageToken, files(id, name, modifiedTime, mimeType)',
+                                        pageToken=page_token).execute()
+        for file in response.get('files', []):
+            if file['mimeType'] == 'application/vnd.google-apps.folder':
+                results.extend(get_metadata_from_drive_recursive(service, file['id']))
+            else:
+                results.append({
+                    'google_doc_id': file['id'],
+                    'title': file['name'],
+                    'Updated': file['modifiedTime']
+                })
+        page_token = response.get('nextPageToken', None)
+        if page_token is None:
+            break  
+    return results
+
+def get_metadata_dataframe_from_drive(service=authenticate(), folder_id=GOOGLE_FOLDER_ID):
+    results = get_metadata_from_drive_recursive(service, folder_id)
+    metadata_df = pd.DataFrame(results)
+    return metadata_df
+
+def load_and_split_docs_from_drive(folder_id):
 
     loader = GoogleDriveLoader(
         folder_id = folder_id,
-        token_path = "./.credentials/google_token.json",
-        credentials_path = "./.credentials/credentials.json",
+        token_path = GOOGLE_TOKEN_PATH,
+        credentials_path = GOOGLE_CREDENTIALS_PATH,
         recursive = True
         )
     
     pre_split_docs = loader.load()
-    for i, document in enumerate(pre_split_docs):
-        document.id = i
-        local_docs[document.id] = {
-            'modified_time': document.metadata['when'],
-            'splits': [],
-            'vector_db_indexes' : []
-        }
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=20,
         chunk_overlap=0
     )
 
-    for document in pre_split_docs:
-        split_doc = splitter.split_documents([document])
-        for split in split_doc:
-            split.id = str(uuid.uuid4())
-            local_docs[document.id]['splits'].append(split)
-
-    string_representation = dumps(local_docs)
-    with open('docs.json', 'w') as file:
-        json.dump(string_representation, file)
+    split_docs = splitter.split_documents(pre_split_docs)
     
-    return local_docs
+    return split_docs
 
-def create_db(docs):
+def create_db(documents):
     embedding = OpenAIEmbeddings(model="text-embedding-3-small")
-    vector_store = FAISS.from_documents(docs, embedding=embedding)
+    vector_store = FAISS.from_documents(documents, embedding=embedding)
     vector_store.save_local("faiss_index")
     return vector_store
 
@@ -128,49 +162,63 @@ def process_chat(chain, question, chat_history):
     })
     return response["answer"]
 
-def extract_doc_id(url):
+def extract_google_doc_id(url):
     match = re.search(r'/d/([a-zA-Z0-9_-]+)', url)
     return match.group(1) if match else None
 
+def list_vector_store_dataframe(vector_store):
+    vector_df = convert_vector_store_to_dataframe(vector_store)
+    print(vector_df)
 
-if __name__ == '__main__':
-    docs = get_docs_from_drive(GOOGLE_FOLDER_ID)
-    all_splits = []
-    for item in docs.values():
-        for split in item['splits']:
-                all_splits.append(split)
-    vector_store = create_db(all_splits)
-
+def convert_vector_store_to_dataframe(vector_store):
     v_dict = vector_store.docstore._dict
     data_rows = []
     for k in v_dict.keys():
         source_url = v_dict[k].metadata['source']
-        google_doc_id = extract_doc_id(source_url)
+        google_doc_id = extract_google_doc_id(source_url)
         title = v_dict[k].metadata['title']
         modified_time = v_dict[k].metadata['when']
         content = v_dict[k].page_content
         data_rows.append({"chunk_id": k, "google_doc_id": google_doc_id, "title": title, "Updated": modified_time, "content": content})
     vector_df = pd.DataFrame(data_rows)
+    return vector_df
 
-    print(vector_df)
+def extract_metadata_from_vectore_store_dataframe(vector_store):
+    df = convert_vector_store_to_dataframe(vector_store)
+    df.drop(columns=['chunk_id', 'content'], inplace=True)
+    df.drop_duplicates(inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    return df
 
-    # print(vector_store.index.ntotal)
-    # vector_db_indexes = vector_store.index_to_docstore_id
-    # for index, guid in vector_db_indexes.items():
-    #     for google_document_index, google_document_values in docs.items():
-    #         for split_document in docs[google_document_index]['splits']:
-    #             if guid == split_document.id:
-    #                 docs['vector_db_indexes'].append(index)
-    # for key in docs:
-    #     for split in docs[key]['splits']:
-    #         print(split.id)
-    # print(vector_db_indexes)
-    # vector_store.add_documents(all_splits)
-    # for key in docs:
-    #     for split in docs[key]['splits']:
-    #         print(split.id)
-    # print(vector_db_indexes)
-    # print(vector_store.index.ntotal)
+def delete_documents_from_vector_store(vector_store, google_doc_ids):
+    vector_df = convert_vector_store_to_dataframe(vector_store)
+    if not isinstance(google_doc_ids, list):
+        google_doc_ids = [google_doc_ids]
+    chunks_to_delete = []
+    for google_doc_id in google_doc_ids:
+        chunks_list = vector_df.loc[vector_df['google_doc_id'] == google_doc_id]['chunk_id'].tolist()
+        chunks_to_delete.extend(chunks_list)
+    vector_store.delete(chunks_list)
+
+# def update_vector_store(vector_store):
+#     vector_df = convert_vector_store_to_dataframe(vector_store)
+#     metadata_df = get_metadata_dataframe_from_drive()
+#     for _, row in vector_df.iterrows():
+#         google_doc_id = row['google_doc_id']
+
+
+
+
+
+if __name__ == '__main__':
+    if os.path.exists('faiss_index/index.faiss') and os.path.exists('faiss_index/index.pkl'):
+        vector_store = load_db()
+    else:
+        documents = load_and_split_docs_from_drive(GOOGLE_FOLDER_ID)
+        vector_store = create_db(documents)
+    print(extract_metadata_from_vectore_store_dataframe(vector_store))
+    print(get_metadata_dataframe_from_drive())
+
 
     chain = create_chain(vector_store)
     chat_history = []
