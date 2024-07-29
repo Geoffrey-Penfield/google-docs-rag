@@ -1,9 +1,5 @@
 from dotenv import load_dotenv
 import os
-import pickle
-import json
-import uuid
-import pprint
 import pandas as pd
 import re
 from langchain_openai import ChatOpenAI
@@ -17,7 +13,6 @@ from langchain.chains.retrieval import create_retrieval_chain
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.prompts import MessagesPlaceholder
 from langchain.chains.history_aware_retriever import create_history_aware_retriever
-from langchain_core.load import dumpd, dumps, load, loads
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -84,9 +79,10 @@ def get_metadata_from_drive_recursive(service=authenticate(), folder_id=GOOGLE_F
 def get_metadata_dataframe_from_drive(service=authenticate(), folder_id=GOOGLE_FOLDER_ID):
     results = get_metadata_from_drive_recursive(service, folder_id)
     metadata_df = pd.DataFrame(results)
+    metadata_df['Updated'] = pd.to_datetime(metadata_df['Updated'])
     return metadata_df
 
-def load_and_split_docs_from_drive(folder_id):
+def load_and_split_docs_from_folder_id_recursively(folder_id):
 
     loader = GoogleDriveLoader(
         folder_id = folder_id,
@@ -98,7 +94,26 @@ def load_and_split_docs_from_drive(folder_id):
     pre_split_docs = loader.load()
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=20,
+        chunk_size=200,
+        chunk_overlap=0
+    )
+
+    split_docs = splitter.split_documents(pre_split_docs)
+    
+    return split_docs
+
+def load_and_split_docs_from_document_ids(document_ids):
+
+    loader = GoogleDriveLoader(
+        document_ids= document_ids,
+        token_path = GOOGLE_TOKEN_PATH,
+        credentials_path = GOOGLE_CREDENTIALS_PATH,
+        )
+    
+    pre_split_docs = loader.load()
+
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=200,
         chunk_overlap=0
     )
 
@@ -181,6 +196,7 @@ def convert_vector_store_to_dataframe(vector_store):
         content = v_dict[k].page_content
         data_rows.append({"chunk_id": k, "google_doc_id": google_doc_id, "title": title, "Updated": modified_time, "content": content})
     vector_df = pd.DataFrame(data_rows)
+    vector_df['Updated'] = pd.to_datetime(vector_df['Updated'])
     return vector_df
 
 def extract_metadata_from_vectore_store_dataframe(vector_store):
@@ -200,26 +216,44 @@ def delete_documents_from_vector_store(vector_store, google_doc_ids):
         chunks_to_delete.extend(chunks_list)
     vector_store.delete(chunks_list)
 
-# def update_vector_store(vector_store):
-#     vector_df = convert_vector_store_to_dataframe(vector_store)
-#     metadata_df = get_metadata_dataframe_from_drive()
-#     for _, row in vector_df.iterrows():
-#         google_doc_id = row['google_doc_id']
+def add_documents_to_vector_store(vector_store, google_doc_ids):
+    documents = load_and_split_docs_from_document_ids(google_doc_ids)
+    vector_store.add_documents(documents)
 
+def update_vector_store(vector_store):
+    vector_store_df = extract_metadata_from_vectore_store_dataframe(vector_store)
+    drive_df = get_metadata_dataframe_from_drive()
+    new_documents_df = drive_df[~drive_df['google_doc_id'].isin(vector_store_df['google_doc_id'])]
+    deleted_documents_df = vector_store_df[~vector_store_df['google_doc_id'].isin(drive_df['google_doc_id'])]
+    merged = pd.merge(vector_store_df, drive_df, on='google_doc_id', suffixes=('_old', '_new'))
+    updated_documents_df = merged[merged['Updated_old'] != merged['Updated_new']]
 
+    new_documents = new_documents_df['google_doc_id'].tolist()
+    deleted_documents = deleted_documents_df['google_doc_id'].tolist()
+    updated_documents = updated_documents_df['google_doc_id'].tolist()
 
+    print(new_documents)
+    print(deleted_documents)
+    print(updated_documents)
 
-
+    if len(new_documents) != 0:
+        add_documents_to_vector_store(vector_store, new_documents)
+    if len(deleted_documents) != 0:
+        delete_documents_from_vector_store(vector_store, deleted_documents)
+    if len(updated_documents) != 0:
+        delete_documents_from_vector_store(vector_store, updated_documents)
+        add_documents_to_vector_store(vector_store, updated_documents)
+    
+    vector_store.save_local("faiss_index")
+    
 if __name__ == '__main__':
     if os.path.exists('faiss_index/index.faiss') and os.path.exists('faiss_index/index.pkl'):
         vector_store = load_db()
+        update_vector_store(vector_store)
     else:
-        documents = load_and_split_docs_from_drive(GOOGLE_FOLDER_ID)
+        documents = load_and_split_docs_from_folder_id_recursively(GOOGLE_FOLDER_ID)
         vector_store = create_db(documents)
-    print(extract_metadata_from_vectore_store_dataframe(vector_store))
-    print(get_metadata_dataframe_from_drive())
-
-
+    list_vector_store_dataframe(vector_store)
     chain = create_chain(vector_store)
     chat_history = []
 
@@ -232,4 +266,3 @@ if __name__ == '__main__':
         chat_history.append(HumanMessage(content=user_input))
         chat_history.append(AIMessage(content=response))
         print(f"{GREEN} Assistant: {response}")
-
