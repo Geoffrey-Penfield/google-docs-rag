@@ -31,6 +31,9 @@ GOOGLE_CREDENTIALS_PATH = '.credentials/credentials.json'
 GOOGLE_TOKEN_PATH = '.credentials/google_token.json'
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
+CHUNK_SIZE = 200
+CHUNK_OVERLAP = 0
+
 def authenticate():
     creds = None
     if os.path.exists(GOOGLE_TOKEN_PATH):
@@ -41,7 +44,7 @@ def authenticate():
         else:
             flow = InstalledAppFlow.from_client_secrets_file(GOOGLE_CREDENTIALS_PATH, SCOPES)
             creds = flow.run_local_server(port=0)
-        with open(GOOGLE_CREDENTIALS_PATH, 'w') as file:
+        with open(GOOGLE_TOKEN_PATH, 'w') as file:
             file.write(creds.to_json())
 
     service = build('drive', 'v3', credentials=creds)
@@ -77,42 +80,32 @@ def get_metadata_dataframe_from_drive(service=authenticate(), folder_id=GOOGLE_F
     return metadata_df
 
 def load_and_split_docs_from_folder_id_recursively(folder_id):
-
     loader = GoogleDriveLoader(
         folder_id = folder_id,
         token_path = GOOGLE_TOKEN_PATH,
         credentials_path = GOOGLE_CREDENTIALS_PATH,
         recursive = True
         )
-    
     pre_split_docs = loader.load()
-
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=200,
-        chunk_overlap=0
-    )
-
-    split_docs = splitter.split_documents(pre_split_docs)
-    
-    return split_docs
+    documents = split_docs(pre_split_docs)
+    return documents
 
 def load_and_split_docs_from_document_ids(document_ids):
-
     loader = GoogleDriveLoader(
         document_ids= document_ids,
         token_path = GOOGLE_TOKEN_PATH,
         credentials_path = GOOGLE_CREDENTIALS_PATH,
         )
-    
     pre_split_docs = loader.load()
+    documents = split_docs(pre_split_docs)
+    return documents
 
+def split_docs(documents):
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=200,
-        chunk_overlap=0
+        chunk_size = CHUNK_SIZE,
+        chunk_overlap = CHUNK_OVERLAP
     )
-
-    split_docs = splitter.split_documents(pre_split_docs)
-    
+    split_docs = splitter.split_documents(documents)
     return split_docs
 
 def create_db(documents):
@@ -125,7 +118,7 @@ def create_db(documents):
 def load_db():
     embedding = OpenAIEmbeddings(model="text-embedding-3-small")
     vector_store = FAISS.load_local("./faiss_index", embeddings=embedding, allow_dangerous_deserialization=True)
-    return vector_store    
+    return vector_store
 
 def create_chain(vector_store):
     model = ChatOpenAI(
