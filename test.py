@@ -1,0 +1,51 @@
+from dotenv import load_dotenv
+import os
+import pandas as pd
+import re
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_google_community import GoogleDriveLoader
+from langchain_openai import OpenAIEmbeddings
+from langchain_community.vectorstores.faiss import FAISS
+from langchain.chains.retrieval import create_retrieval_chain
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.prompts import MessagesPlaceholder
+from langchain.chains.history_aware_retriever import create_history_aware_retriever
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+import pprint
+from langchain_core.documents import Document
+
+GOOGLE_FOLDER_ID = "16JNkBJlo4uUAdz3RNwfgMQ7SRl05V9tUnIBQiE5zLXY"
+
+GOOGLE_CREDENTIALS_PATH = '.credentials/credentials.json'
+GOOGLE_TOKEN_PATH = '.credentials/google_token.json'
+SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+
+def authenticate():
+    creds = None
+    if os.path.exists(GOOGLE_TOKEN_PATH):
+        creds = Credentials.from_authorized_user_file(GOOGLE_TOKEN_PATH, SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(GOOGLE_CREDENTIALS_PATH, SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open(GOOGLE_TOKEN_PATH, 'w') as file:
+            file.write(creds.to_json())
+
+    service = build('drive', 'v3', credentials=creds)
+    return service
+
+def get_metadata_from_drive_recursive(service=authenticate(), folder_id=GOOGLE_FOLDER_ID):
+    response = service.files().get(fileId=folder_id, fields='modifiedTime').execute()
+    return response
+
+documents = get_metadata_from_drive_recursive()
+
+print(documents)

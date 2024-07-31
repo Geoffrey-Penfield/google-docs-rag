@@ -17,6 +17,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+import pprint
 
 load_dotenv()
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
@@ -90,6 +91,10 @@ def load_and_split_docs_from_folder_id_recursively(folder_id):
     documents = split_docs(pre_split_docs)
     return documents
 
+def get_updated_time_from_drive(folder_id, service=authenticate()):
+    response = service.files().get(fileId=folder_id, fields='modifiedTime').execute()
+    return response
+
 def load_and_split_docs_from_document_ids(document_ids):
     loader = GoogleDriveLoader(
         document_ids= document_ids,
@@ -97,6 +102,12 @@ def load_and_split_docs_from_document_ids(document_ids):
         credentials_path = GOOGLE_CREDENTIALS_PATH,
         )
     pre_split_docs = loader.load()
+
+    for doc in pre_split_docs:
+        if not doc.metadata['when']:
+            id = extract_google_doc_id(doc.metadata['source'])
+            doc.metadata['when'] = get_metadata_dataframe_from_drive(id)
+
     documents = split_docs(pre_split_docs)
     return documents
 
@@ -242,6 +253,8 @@ if __name__ == '__main__':
     else:
         documents = load_and_split_docs_from_folder_id_recursively(GOOGLE_FOLDER_ID)
         vector_store = create_db(documents)
+    pprint.pprint(vector_store.docstore._dict)
+    pprint.pprint(get_metadata_from_drive_recursive())
     chain = create_chain(vector_store)
     chat_history = []
 
