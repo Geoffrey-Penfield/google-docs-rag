@@ -88,25 +88,31 @@ def load_and_split_docs_from_folder_id_recursively(folder_id):
         recursive = True
         )
     pre_split_docs = loader.load()
+
+    for doc in pre_split_docs:
+        if 'when' not in doc.metadata:
+            id = extract_google_doc_id(doc.metadata['source'])
+            doc.metadata['when'] = get_updated_time_from_drive(id)
+
     documents = split_docs(pre_split_docs)
     return documents
 
 def get_updated_time_from_drive(folder_id, service=authenticate()):
     response = service.files().get(fileId=folder_id, fields='modifiedTime').execute()
-    return response
+    return response['modifiedTime']
 
 def load_and_split_docs_from_document_ids(document_ids):
     loader = GoogleDriveLoader(
-        document_ids= document_ids,
+        document_ids = document_ids,
         token_path = GOOGLE_TOKEN_PATH,
         credentials_path = GOOGLE_CREDENTIALS_PATH,
         )
     pre_split_docs = loader.load()
 
     for doc in pre_split_docs:
-        if not doc.metadata['when']:
+        if 'when' not in doc.metadata:
             id = extract_google_doc_id(doc.metadata['source'])
-            doc.metadata['when'] = get_metadata_dataframe_from_drive(id)
+            doc.metadata['when'] = get_updated_time_from_drive(id)
 
     documents = split_docs(pre_split_docs)
     return documents
@@ -253,8 +259,7 @@ if __name__ == '__main__':
     else:
         documents = load_and_split_docs_from_folder_id_recursively(GOOGLE_FOLDER_ID)
         vector_store = create_db(documents)
-    pprint.pprint(vector_store.docstore._dict)
-    pprint.pprint(get_metadata_from_drive_recursive())
+    list_vector_store_dataframe(vector_store)
     chain = create_chain(vector_store)
     chat_history = []
 

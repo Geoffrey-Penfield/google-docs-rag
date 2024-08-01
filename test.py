@@ -20,7 +20,8 @@ from googleapiclient.discovery import build
 import pprint
 from langchain_core.documents import Document
 
-GOOGLE_FOLDER_ID = "16JNkBJlo4uUAdz3RNwfgMQ7SRl05V9tUnIBQiE5zLXY"
+# GOOGLE_FOLDER_ID = "16JNkBJlo4uUAdz3RNwfgMQ7SRl05V9tUnIBQiE5zLXY"
+GOOGLE_FOLDER_ID = "196Pf4CodXHjLqlUijeBwMSd5HXM_lakkdXFovp7YgRg"
 
 GOOGLE_CREDENTIALS_PATH = '.credentials/credentials.json'
 GOOGLE_TOKEN_PATH = '.credentials/google_token.json'
@@ -43,7 +44,7 @@ def authenticate():
     return service
 
 def get_metadata_from_drive_recursive(service=authenticate(), folder_id=GOOGLE_FOLDER_ID):
-    response = service.files().get(fileId=folder_id, fields='modifiedTime').execute()
+    response = service.files().get(fileId=folder_id, fields='modifiedTime, mimeType').execute()
     return response
 
 documents = get_metadata_from_drive_recursive()
