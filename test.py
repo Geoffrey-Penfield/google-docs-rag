@@ -43,10 +43,17 @@ def authenticate():
     service = build('drive', 'v3', credentials=creds)
     return service
 
-def get_metadata_from_drive_recursive(service=authenticate(), folder_id=GOOGLE_FOLDER_ID):
-    response = service.files().get(fileId=folder_id, fields='modifiedTime, mimeType').execute()
-    return response
+def load_and_split_docs_from_document_ids(document_ids):
+    loader = GoogleDriveLoader(
+        file_ids = document_ids,
+        token_path = GOOGLE_TOKEN_PATH,
+        credentials_path = GOOGLE_CREDENTIALS_PATH,
+        )
+    documents = loader.load()
 
-documents = get_metadata_from_drive_recursive()
+    return documents
+
+
+documents = load_and_split_docs_from_document_ids(["16JNkBJlo4uUAdz3RNwfgMQ7SRl05V9tUnIBQiE5zLXY"])
 
 print(documents)
